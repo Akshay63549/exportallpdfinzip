@@ -7,7 +7,7 @@ const archiver = require("archiver");
 const path = require("path");
 const { createInvoice } = require("./routes/createInvoice.js");
 const studentRoutes = require("./routes/studentRoutes");
-
+const fs = require("fs")
 const app = express();
 
 // Middleware
@@ -147,63 +147,69 @@ app.get("/generate-invoice", (req, res) => {
     invoice_nr: 1234
   };
 
-  const invoicePath = path.join(__dirname, "invoice.pdf");
+    // Define the temp directory
+    const tempDir = path.join(__dirname, "temp");
 
-  // Generate the invoice and wait until it's written
-  createInvoice(invoice, invoicePath, () => {
-    // Send the file after it's fully written
-    res.sendFile(invoicePath, (err) => {
-      if (err) {
-        console.error("Error sending the invoice file:", err);
-        res.status(500).send("Error generating invoice");
-      } else {
-        console.log("Invoice generated and sent successfully");
-      }
+    // Ensure the temp directory exists
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir);
+    }
+  
+    // Dynamically define the PDF file name within the temp directory
+    const tempFile = path.join(tempDir, `invoice_${Date.now()}.pdf`);
+  
+    // Generate the invoice
+    createInvoice(invoice, tempFile, () => {
+      // Send the generated invoice file
+      res.sendFile(tempFile, (err) => {
+        if (err) {
+          console.error("Error sending the invoice file:", err);
+          res.status(500).send("Error generating invoice");
+        } else {
+          console.log("Invoice sent successfully");
+  
+          // Delete the temporary directory and all its contents
+          fs.rmdir(tempDir, { recursive: true }, (err) => {
+            if (err) {
+              console.error("Error deleting temp directory:", err);
+            } else {
+              console.log("Temporary directory deleted successfully");
+            }
+          });
+        }
+      });
     });
   });
-});
+// Route for bulk export
 app.get("/generate-invoices", (req, res) => {
-  // Example list of invoices
+  const tempDir = path.join(__dirname, "temp");
+  
+  // Ensure the temp directory exists
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir);
+  }
+
   const invoices = [
+    // Example list of invoices
     {
-      shipping: {
-        name: "John Doe",
-        address: "1234 Main Street",
-        city: "San Francisco",
-        state: "CA",
-        country: "US",
-      },
-      items: [
-        { item: "TC 100", description: "Toner Cartridge", quantity: 2, amount: 6000 },
-        { item: "USB_EXT", description: "USB Cable Extender", quantity: 1, amount: 2000 },
-      ],
+      shipping: { name: "John Doe", address: "1234 Main Street", city: "San Francisco", state: "CA", country: "US" },
+      items: [{ item: "TC 100", description: "Toner Cartridge", quantity: 2, amount: 6000 }],
       subtotal: 8000,
       paid: 0,
       invoice_nr: 1234,
     },
     {
-      shipping: {
-        name: "Jane Smith",
-        address: "5678 Elm Street",
-        city: "Los Angeles",
-        state: "CA",
-        country: "US",
-      },
-      items: [
-        { item: "USB_EXT", description: "USB Cable Extender", quantity: 1, amount: 2000 },
-        { item: "Laptop", description: "Dell Inspiron", quantity: 1, amount: 50000 },
-      ],
-      subtotal: 52000,
-      paid: 10000,
+      shipping: { name: "Jane Smith", address: "5678 Elm Street", city: "Los Angeles", state: "CA", country: "US" },
+      items: [{ item: "Laptop", description: "Dell Inspiron", quantity: 1, amount: 50000 }],
+      subtotal: 50000,
+      paid: 0,
       invoice_nr: 5678,
     },
   ];
 
-  // Set response headers for downloading the zip
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", "attachment; filename=invoices.zip");
 
-  // Create a zip archive
   const archive = archiver("zip");
   archive.pipe(res);
 
@@ -211,17 +217,24 @@ app.get("/generate-invoices", (req, res) => {
 
   invoices.forEach((invoice, index) => {
     const fileName = `invoice_${invoice.invoice_nr}.pdf`;
-    const tempPath = path.join(__dirname, fileName);
+    const filePath = path.join(tempDir, fileName);
 
-    // Generate each invoice PDF
-    createInvoice(invoice, tempPath, () => {
-      // Append the file to the archive
-      archive.file(tempPath, { name: fileName });
+    // Generate the invoice
+    createInvoice(invoice, filePath, () => {
+      archive.file(filePath, { name: fileName });
       completed++;
 
-      // Finalize archive once all invoices are processed
       if (completed === invoices.length) {
-        archive.finalize();
+        archive.finalize().then(() => {
+          // After finalizing, delete the temp folder
+          fs.rm(tempDir, { recursive: true, force: true }, (err) => {
+            if (err) {
+              console.error("Error deleting temp folder:", err);
+            } else {
+              console.log("Temp folder deleted successfully");
+            }
+          });
+        });
       }
     });
   });
@@ -231,7 +244,6 @@ app.get("/generate-invoices", (req, res) => {
     res.status(500).send("Error generating invoices");
   });
 });
-
 // Default route
 app.get("/", (req, res) => {
   res.send("Hello World!");
